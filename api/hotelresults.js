@@ -1351,12 +1351,155 @@ function normalizeHotel(
    * -------------------------------------------------------
    * LOCATION
    * -------------------------------------------------------
+   *
+   * FIX:
+   * Use the actual hotel address returned by SerpApi.
+   *
+   * IMPORTANT:
+   * Do NOT fall back to the search destination.
+   * Searching "New York" must not make the address
+   * display as "New York".
+   * -------------------------------------------------------
    */
 
-  const address =
-    hotel.address ||
-    hotel.location ||
-    destination;
+  let address = "";
+
+
+  /*
+   * Direct address fields.
+   */
+
+  if (
+    typeof hotel.address === "string" &&
+    hotel.address.trim()
+  ) {
+
+    address =
+      hotel.address.trim();
+
+  }
+
+
+  if (
+    !address &&
+    typeof hotel.formatted_address === "string" &&
+    hotel.formatted_address.trim()
+  ) {
+
+    address =
+      hotel.formatted_address.trim();
+
+  }
+
+
+  if (
+    !address &&
+    typeof hotel.full_address === "string" &&
+    hotel.full_address.trim()
+  ) {
+
+    address =
+      hotel.full_address.trim();
+
+  }
+
+
+  if (
+    !address &&
+    typeof hotel.street_address === "string" &&
+    hotel.street_address.trim()
+  ) {
+
+    address =
+      hotel.street_address.trim();
+
+  }
+
+
+  if (
+    !address &&
+    typeof hotel.address_line === "string" &&
+    hotel.address_line.trim()
+  ) {
+
+    address =
+      hotel.address_line.trim();
+
+  }
+
+
+  if (
+    !address &&
+    typeof hotel.addressLine === "string" &&
+    hotel.addressLine.trim()
+  ) {
+
+    address =
+      hotel.addressLine.trim();
+
+  }
+
+
+  /*
+   * Location can sometimes be returned as a string.
+   */
+
+  if (
+    !address &&
+    typeof hotel.location === "string" &&
+    hotel.location.trim()
+  ) {
+
+    address =
+      hotel.location.trim();
+
+  }
+
+
+  /*
+   * Location can sometimes be returned as an object.
+   */
+
+  if (
+    !address &&
+    hotel.location &&
+    typeof hotel.location === "object"
+  ) {
+
+    const locationAddress =
+      hotel.location.address ||
+      hotel.location.formatted_address ||
+      hotel.location.full_address ||
+      hotel.location.street_address ||
+      hotel.location.address_line ||
+      hotel.location.addressLine ||
+      "";
+
+    if (
+      typeof locationAddress === "string" &&
+      locationAddress.trim()
+    ) {
+
+      address =
+        locationAddress.trim();
+
+    }
+
+  }
+
+
+  /*
+   * IMPORTANT:
+   *
+   * There is intentionally NO:
+   *
+   *   || destination
+   *
+   * here.
+   *
+   * The search destination is not the hotel's
+   * actual address.
+   */
 
 
   /*
@@ -1446,7 +1589,7 @@ function normalizeHotel(
    * -------------------------------------------------------
    * PROPERTY TOKEN
    * -------------------------------------------------------
-   */
+ */
 
   const propertyToken =
     hotel.property_token ||
@@ -1685,4 +1828,3 @@ function normalizeHotel(
   };
 
 }
-
