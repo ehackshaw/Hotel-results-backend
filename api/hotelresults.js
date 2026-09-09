@@ -1,899 +1,703 @@
-
 /**
  * =========================================================
- * BOKKARA HOTELS API
+ * BOKKARA HOTEL RESULTS API
  * =========================================================
  *
- * Backend proxy for SerpApi Google Hotels.
+ * SERPAPI:
+ * Google Hotels
  *
- * Endpoint:
+ * ENDPOINT:
+ * https://serpapi.com/search?engine=google_hotels
  *
- * GET /api/hotels
+ * VERCEL:
+ * /api/hotelresults
  *
- * Example:
- *
- * /api/hotels
- *   ?destination=Port%20of%20Spain
- *   &check_in_date=2026-09-15
- *   &check_out_date=2026-09-18
- *   &adults=2
- *   &rooms=1
- *
- * Environment variable required:
- *
- * SERPAPI_KEY=YOUR_SERPAPI_KEY
+ * ENVIRONMENT VARIABLE:
+ * SERPAPI_API_KEY
  *
  * =========================================================
  */
 
-export default async function handler(req, res) {
+'use strict';
 
-  /*
-   * -------------------------------------------------------
-   * CORS
-   * -------------------------------------------------------
-   */
 
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "*"
-  );
+const SERPAPI_URL =
+  'https://serpapi.com/search';
 
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, OPTIONS"
-  );
+
+/* =========================================================
+   CORS
+========================================================= */
+
+function setCors(res) {
 
   res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type"
+    'Access-Control-Allow-Origin',
+    '*'
   );
 
-
-  if (req.method === "OPTIONS") {
-
-    return res.status(200).end();
-
-  }
-
-
-  if (req.method !== "GET") {
-
-    return res.status(405).json({
-
-      success: false,
-
-      error: "Method not allowed"
-
-    });
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * API KEY
-   * -------------------------------------------------------
-   */
-
-  const API_KEY =
-    process.env.SERPAPI_KEY;
-
-
-  if (!API_KEY) {
-
-    return res.status(500).json({
-
-      success: false,
-
-      error:
-        "SERPAPI_KEY environment variable is missing."
-
-    });
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * REQUEST PARAMETERS
-   * -------------------------------------------------------
-   */
-
-  const {
-
-    destination,
-
-    q,
-
-    check_in_date,
-
-    check_out_date,
-
-    adults = "2",
-
-    children = "0",
-
-    rooms = "1",
-
-    gl = "tt",
-
-    hl = "en",
-
-    currency = "USD",
-
-    sort,
-
-    min_price,
-
-    max_price,
-
-    rating,
-
-    stars,
-
-    amenities,
-
-    free_cancellation,
-
-    special_offers,
-
-    property_types,
-
-    next_page_token,
-
-    limit
-
-  } = req.query;
-
-
-  /*
-   * -------------------------------------------------------
-   * DESTINATION
-   * -------------------------------------------------------
-   */
-
-  const searchQuery =
-    destination ||
-    q ||
-    "Port of Spain";
-
-
-  /*
-   * -------------------------------------------------------
-   * VALIDATION
-   * -------------------------------------------------------
-   */
-
-  if (!searchQuery) {
-
-    return res.status(400).json({
-
-      success: false,
-
-      error:
-        "A destination is required."
-
-    });
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * SERPAPI PARAMETERS
-   * -------------------------------------------------------
-   */
-
-  const params =
-    new URLSearchParams();
-
-
-  params.set(
-    "engine",
-    "google_hotels"
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'GET, POST, OPTIONS'
   );
 
-
-  params.set(
-    "q",
-    searchQuery
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type'
   );
 
-
-  params.set(
-    "api_key",
-    API_KEY
+  res.setHeader(
+    'Cache-Control',
+    'no-store'
   );
+}
 
 
-  /*
-   * -------------------------------------------------------
-   * DATES
-   * -------------------------------------------------------
-   */
+/* =========================================================
+   HELPERS
+========================================================= */
 
-  if (check_in_date) {
+function clean(value) {
 
-    params.set(
-      "check_in_date",
-      check_in_date
-    );
-
+  if (value === undefined || value === null) {
+    return '';
   }
 
+  return String(value).trim();
 
-  if (check_out_date) {
-
-    params.set(
-      "check_out_date",
-      check_out_date
-    );
-
-  }
+}
 
 
-  /*
-   * -------------------------------------------------------
-   * GUESTS
-   * -------------------------------------------------------
-   */
+function number(value, fallback = 0) {
 
-  params.set(
-    "adults",
-    String(adults)
-  );
+  const parsed = Number(value);
 
+  return Number.isFinite(parsed)
+    ? parsed
+    : fallback;
 
-  params.set(
-    "children",
-    String(children)
-  );
+}
 
 
-  params.set(
-    "rooms",
-    String(rooms)
-  );
-
-
-  /*
-   * -------------------------------------------------------
-   * LOCALIZATION
-   * -------------------------------------------------------
-   */
-
-  params.set(
-    "gl",
-    gl
-  );
-
-
-  params.set(
-    "hl",
-    hl
-  );
-
-
-  params.set(
-    "currency",
-    currency
-  );
-
-
-  /*
-   * -------------------------------------------------------
-   * SORTING
-   *
-   * Shopify frontend:
-   *
-   * recommended
-   * price-low
-   * price-high
-   * rating
-   * stars
-   *
-   * SerpApi:
-   *
-   * 3  = Lowest price
-   * 8  = Highest rating
-   * 13 = Most reviewed
-   * -------------------------------------------------------
-   */
-
-  if (sort === "price-low") {
-
-    params.set(
-      "sort_by",
-      "3"
-    );
-
-  }
-
-  else if (sort === "rating") {
-
-    params.set(
-      "sort_by",
-      "8"
-    );
-
-  }
-
-  else if (sort === "price-high") {
-
-    /*
-     * Google Hotels does not expose a
-     * "highest price" sort through the
-     * documented sort_by values.
-     *
-     * We therefore sort the returned
-     * properties ourselves below.
-     */
-
-  }
-
-  else if (sort === "stars") {
-
-    /*
-     * Star sorting is performed locally
-     * after SerpApi returns the results.
-     */
-
-  }
-
-  else if (sort === "recommended") {
-
-    /*
-     * Leave SerpApi's default relevance
-     * ordering.
-     */
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * PRICE FILTERS
-   * -------------------------------------------------------
-   */
-
-  if (min_price) {
-
-    params.set(
-      "min_price",
-      String(min_price)
-    );
-
-  }
-
-
-  if (max_price) {
-
-    params.set(
-      "max_price",
-      String(max_price)
-    );
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * RATING FILTER
-   *
-   * Frontend:
-   *
-   * 7+
-   * 8+
-   * 9+
-   *
-   * SerpApi:
-   *
-   * 7 = 3.5+
-   * 8 = 4.0+
-   * 9 = 4.5+
-   * -------------------------------------------------------
-   */
+function boolean(value) {
 
   if (
-    rating === "7" ||
-    rating === "8" ||
-    rating === "9"
+    value === true ||
+    value === 'true' ||
+    value === '1'
   ) {
+    return true;
+  }
 
-    params.set(
-      "rating",
-      rating
+  return false;
+
+}
+
+
+function arrayFrom(value) {
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (!value) {
+    return [];
+  }
+
+  return String(value)
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+
+}
+
+
+/* =========================================================
+   DATE VALIDATION
+========================================================= */
+
+function isValidDate(value) {
+
+  if (!value) {
+    return false;
+  }
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(
+    String(value)
+  );
+
+}
+
+
+/* =========================================================
+   NORMALIZE AMENITIES
+========================================================= */
+
+function normalizeAmenities(hotel) {
+
+  const amenities = Array.isArray(
+    hotel.amenities
+  )
+    ? hotel.amenities
+    : [];
+
+  return amenities
+    .map(item => clean(item))
+    .filter(Boolean);
+
+}
+
+
+/* =========================================================
+   NORMALIZE IMAGES
+========================================================= */
+
+function normalizeImages(hotel) {
+
+  const images = [];
+
+  if (hotel.thumbnail) {
+    images.push(
+      clean(hotel.thumbnail)
     );
-
   }
 
+  if (Array.isArray(hotel.images)) {
 
-  /*
-   * -------------------------------------------------------
-   * STAR FILTER
-   *
-   * Frontend:
-   *
-   * 3
-   * 4
-   * 5
-   * -------------------------------------------------------
-   */
+    hotel.images.forEach(image => {
 
-  if (stars) {
+      if (typeof image === 'string') {
 
-    const validStars =
-      String(stars)
-        .split(",")
-        .filter(function (value) {
-
-          return [
-            "2",
-            "3",
-            "4",
-            "5"
-          ].includes(value);
-
-        });
-
-
-    if (validStars.length) {
-
-      params.set(
-        "hotel_class",
-        validStars.join(",")
-      );
-
-    }
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * AMENITIES
-   *
-   * The frontend sends normalized names:
-   *
-   * wifi
-   * pool
-   * parking
-   * restaurant
-   * gym
-   *
-   * SerpApi uses numeric amenity IDs.
-   *
-   * These IDs should be adjusted if your
-   * SerpApi account returns different mappings.
-   *
-   * The backend also performs local filtering
-   * so the frontend receives exactly what
-   * it expects.
-   * -------------------------------------------------------
-   */
-
-  const amenityMap = {
-
-    wifi: "35",
-
-    pool: "9",
-
-    parking: "19",
-
-    restaurant: "14",
-
-    gym: "7"
-
-  };
-
-
-  if (amenities) {
-
-    const requestedAmenities =
-      String(amenities)
-        .split(",")
-        .map(function (item) {
-
-          return item
-            .trim()
-            .toLowerCase();
-
-        })
-        .filter(Boolean);
-
-
-    const serpAmenities =
-      requestedAmenities
-        .map(function (item) {
-
-          return amenityMap[item];
-
-        })
-        .filter(Boolean);
-
-
-    if (serpAmenities.length) {
-
-      params.set(
-        "amenities",
-        serpAmenities.join(",")
-      );
-
-    }
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * FREE CANCELLATION
-   * -------------------------------------------------------
-   */
-
-  if (
-    free_cancellation === "true"
-  ) {
-
-    params.set(
-      "free_cancellation",
-      "true"
-    );
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * SPECIAL OFFERS
-   * -------------------------------------------------------
-   */
-
-  if (
-    special_offers === "true"
-  ) {
-
-    params.set(
-      "special_offers",
-      "true"
-    );
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * PROPERTY TYPES
-   * -------------------------------------------------------
-   */
-
-  if (property_types) {
-
-    params.set(
-      "property_types",
-      String(property_types)
-    );
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * PAGINATION
-   * -------------------------------------------------------
-   */
-
-  if (next_page_token) {
-
-    params.set(
-      "next_page_token",
-      String(next_page_token)
-    );
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * FETCH SERPAPI
-   * -------------------------------------------------------
-   */
-
-  const serpApiUrl =
-    "https://serpapi.com/search?" +
-    params.toString();
-
-
-  try {
-
-    const response =
-      await fetch(
-        serpApiUrl,
-        {
-          method: "GET",
-          headers: {
-            "Accept":
-              "application/json"
-          }
+        if (image.trim()) {
+          images.push(image.trim());
         }
-      );
 
-
-    const data =
-      await response.json();
-
-
-    /*
-     * ---------------------------------------------------
-     * SERPAPI ERROR
-     * ---------------------------------------------------
-     */
-
-    if (!response.ok) {
-
-      return res.status(
-        response.status
-      ).json({
-
-        success: false,
-
-        error:
-          data.error ||
-          "SerpApi request failed.",
-
-        serpapi: data
-
-      });
-
-    }
-
-
-    if (data.error) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        error: data.error
-
-      });
-
-    }
-
-
-    /*
-     * ---------------------------------------------------
-     * PROPERTIES
-     * ---------------------------------------------------
-     */
-
-    let properties =
-      Array.isArray(
-        data.properties
-      )
-        ? data.properties
-        : [];
-
-
-    /*
-     * ---------------------------------------------------
-     * NORMALIZE HOTEL DATA
-     * ---------------------------------------------------
-     */
-
-    let hotels =
-      properties.map(
-        function (hotel, index) {
-
-          return normalizeHotel(
-            hotel,
-            index,
-            searchQuery
-          );
-
-        }
-      );
-
-
-    /*
-     * ---------------------------------------------------
-     * LOCAL AMENITY FILTER
-     *
-     * This makes the backend compatible with
-     * the frontend's amenity filters even if
-     * Google returns slightly different amenity
-     * labels.
-     * ---------------------------------------------------
-     */
-
-    if (amenities) {
-
-      const requested =
-        String(amenities)
-          .split(",")
-          .map(function (item) {
-
-            return item
-              .trim()
-              .toLowerCase();
-
-          })
-          .filter(Boolean);
-
-
-      if (requested.length) {
-
-        hotels =
-          hotels.filter(
-            function (hotel) {
-
-              return requested.every(
-                function (required) {
-
-                  return hotel.amenity_keys
-                    .includes(required);
-
-                }
-              );
-
-            }
-          );
+        return;
 
       }
 
-    }
+      if (
+        image &&
+        typeof image === 'object'
+      ) {
 
+        const url =
+          image.original_image ||
+          image.image ||
+          image.thumbnail ||
+          image.url;
 
-    /*
-     * ---------------------------------------------------
-     * FREE CANCELLATION LOCAL FILTER
-     * ---------------------------------------------------
-     */
-
-    if (
-      free_cancellation === "true"
-    ) {
-
-      hotels =
-        hotels.filter(
-          function (hotel) {
-
-            return hotel.free_cancellation === true;
-
-          }
-        );
-
-    }
-
-
-    /*
-     * ---------------------------------------------------
-     * PRICE RANGE FILTER
-     *
-     * Supports frontend ranges:
-     *
-     * under100
-     * 100-200
-     * 200-300
-     * 300plus
-     *
-     * ---------------------------------------------------
-     */
-
-    if (req.query.price_range) {
-
-      const ranges =
-        String(
-          req.query.price_range
-        )
-          .split(",")
-          .map(function (item) {
-
-            return item.trim();
-
-          })
-          .filter(Boolean);
-
-
-      hotels =
-        hotels.filter(
-          function (hotel) {
-
-            const price =
-              Number(
-                hotel.price_per_night
-              );
-
-
-            return ranges.some(
-              function (range) {
-
-                if (
-                  range === "under100"
-                ) {
-
-                  return price < 100;
-
-                }
-
-
-                if (
-                  range === "100-200"
-                ) {
-
-                  return (
-                    price >= 100 &&
-                    price <= 200
-                  );
-
-                }
-
-
-                if (
-                  range === "200-300"
-                ) {
-
-                  return (
-                    price >= 200 &&
-                    price <= 300
-                  );
-
-                }
-
-
-                if (
-                  range === "300plus"
-                ) {
-
-                  return price >= 300;
-
-                }
-
-
-                return true;
-
-              }
-            );
-
-          }
-        );
-
-    }
-
-
-    /*
-     * ---------------------------------------------------
-     * LOCAL SORTING
-     * ---------------------------------------------------
-     */
-
-    if (
-      sort === "price-high"
-    ) {
-
-      hotels.sort(
-        function (a, b) {
-
-          return (
-            b.price_per_night -
-            a.price_per_night
+        if (url) {
+          images.push(
+            String(url).trim()
           );
-
         }
+
+      }
+
+    });
+
+  }
+
+
+  return [
+    ...new Set(
+      images.filter(Boolean)
+    )
+  ];
+
+}
+
+
+/* =========================================================
+   NORMALIZE PRICE
+========================================================= */
+
+function getPrice(hotel) {
+
+  let price = 0;
+
+  if (
+    hotel.rate_per_night &&
+    hotel.rate_per_night.extracted_lowest
+  ) {
+
+    price = number(
+      hotel.rate_per_night.extracted_lowest
+    );
+
+  }
+
+
+  if (
+    !price &&
+    hotel.extracted_price
+  ) {
+
+    price = number(
+      hotel.extracted_price
+    );
+
+  }
+
+
+  if (
+    !price &&
+    hotel.price
+  ) {
+
+    const cleaned =
+      String(hotel.price)
+        .replace(/[^0-9.]/g, '');
+
+    price = number(
+      cleaned
+    );
+
+  }
+
+
+  return price;
+
+}
+
+
+/* =========================================================
+   NORMALIZE HOTEL
+========================================================= */
+
+function normalizeHotel(hotel, index) {
+
+  const amenities =
+    normalizeAmenities(hotel);
+
+  const images =
+    normalizeImages(hotel);
+
+  const price =
+    getPrice(hotel);
+
+  const rating =
+    number(
+      hotel.overall_rating,
+      0
+    );
+
+  const reviews =
+    number(
+      hotel.reviews,
+      0
+    );
+
+  const stars =
+    number(
+      hotel.hotel_class,
+      0
+    );
+
+
+  const lowestPrice =
+    hotel.rate_per_night &&
+    hotel.rate_per_night.lowest
+      ? hotel.rate_per_night.lowest
+      : (
+          price
+            ? `US$${price}`
+            : ''
+        );
+
+
+  const beforeTaxes =
+    hotel.rate_per_night &&
+    hotel.rate_per_night.before_taxes_fees
+      ? hotel.rate_per_night.before_taxes_fees
+      : '';
+
+
+  const latitude =
+    hotel.gps_coordinates &&
+    hotel.gps_coordinates.latitude
+      ? number(
+          hotel.gps_coordinates.latitude
+        )
+      : null;
+
+
+  const longitude =
+    hotel.gps_coordinates &&
+    hotel.gps_coordinates.longitude
+      ? number(
+          hotel.gps_coordinates.longitude
+        )
+      : null;
+
+
+  return {
+
+    id:
+      hotel.property_token ||
+      `hotel-${index}`,
+
+    property_token:
+      hotel.property_token ||
+      null,
+
+    name:
+      clean(hotel.name),
+
+    type:
+      clean(hotel.type) ||
+      'hotel',
+
+    description:
+      clean(hotel.description),
+
+    address:
+      clean(hotel.address),
+
+    neighborhood:
+      clean(hotel.neighborhood),
+
+    city:
+      clean(hotel.city),
+
+    country:
+      clean(hotel.country),
+
+    phone:
+      clean(hotel.phone),
+
+    website:
+      clean(hotel.link),
+
+    thumbnail:
+      clean(hotel.thumbnail),
+
+    images,
+
+    hotel_class:
+      stars,
+
+    stars,
+
+    overall_rating:
+      rating,
+
+    rating,
+
+    reviews,
+
+    review_count:
+      reviews,
+
+    price,
+
+    extracted_price:
+      price,
+
+    price_display:
+      lowestPrice,
+
+    lowest_price:
+      lowestPrice,
+
+    before_taxes_fees:
+      beforeTaxes,
+
+    amenities,
+
+    free_cancellation:
+      Boolean(
+        hotel.free_cancellation
+      ),
+
+    free_breakfast:
+      Boolean(
+        hotel.free_breakfast
+      ),
+
+    eco_certified:
+      Boolean(
+        hotel.eco_certified
+      ),
+
+    sponsored:
+      Boolean(
+        hotel.sponsored
+      ),
+
+    check_in_time:
+      clean(
+        hotel.check_in_time
+      ),
+
+    check_out_time:
+      clean(
+        hotel.check_out_time
+      ),
+
+    latitude,
+
+    longitude,
+
+    gps_coordinates:
+      hotel.gps_coordinates || null,
+
+    nearby_places:
+      Array.isArray(
+        hotel.nearby_places
+      )
+        ? hotel.nearby_places
+        : [],
+
+    prices:
+      Array.isArray(
+        hotel.prices
+      )
+        ? hotel.prices
+        : [],
+
+    property_details_link:
+      clean(
+        hotel.serpapi_property_details_link
+      ),
+
+    serpapi_property_details_link:
+      clean(
+        hotel.serpapi_property_details_link
+      ),
+
+    raw: hotel
+
+  };
+
+}
+
+
+/* =========================================================
+   FILTER HELPERS
+========================================================= */
+
+function hotelHasAmenity(
+  hotel,
+  requestedAmenity
+) {
+
+  const amenities =
+    hotel.amenities.map(
+      item =>
+        String(item).toLowerCase()
+    );
+
+  const target =
+    String(
+      requestedAmenity
+    ).toLowerCase();
+
+
+  return amenities.some(
+    amenity =>
+      amenity.includes(target)
+  );
+
+}
+
+
+/* =========================================================
+   FILTER HOTELS
+========================================================= */
+
+function filterHotels(
+  hotels,
+  filters
+) {
+
+  let results =
+    [...hotels];
+
+
+  /* PRICE */
+
+  if (
+    filters.min_price !== null
+  ) {
+
+    results =
+      results.filter(
+        hotel =>
+          hotel.price >=
+          filters.min_price
       );
 
-    }
+  }
 
 
-    if (
-      sort === "stars"
-    ) {
+  if (
+    filters.max_price !== null
+  ) {
 
-      hotels.sort(
-        function (a, b) {
+    results =
+      results.filter(
+        hotel =>
+          hotel.price <=
+          filters.max_price
+      );
+
+  }
+
+
+  /* STAR RATING */
+
+  if (
+    filters.hotel_class !== null
+  ) {
+
+    results =
+      results.filter(
+        hotel =>
+          hotel.stars >=
+          filters.hotel_class
+      );
+
+  }
+
+
+  /* GUEST RATING */
+
+  if (
+    filters.min_rating !== null
+  ) {
+
+    results =
+      results.filter(
+        hotel =>
+          hotel.rating >=
+          filters.min_rating
+      );
+
+  }
+
+
+  /* AMENITIES */
+
+  if (
+    filters.amenities.length
+  ) {
+
+    results =
+      results.filter(
+        hotel =>
+
+          filters.amenities.every(
+            amenity =>
+              hotelHasAmenity(
+                hotel,
+                amenity
+              )
+          )
+
+      );
+
+  }
+
+
+  /* FREE CANCELLATION */
+
+  if (
+    filters.free_cancellation
+  ) {
+
+    results =
+      results.filter(
+        hotel =>
+          hotel.free_cancellation
+      );
+
+  }
+
+
+  /* FREE BREAKFAST */
+
+  if (
+    filters.free_breakfast
+  ) {
+
+    results =
+      results.filter(
+        hotel =>
+          hotel.free_breakfast
+      );
+
+  }
+
+
+  return results;
+
+}
+
+
+/* =========================================================
+   SORT HOTELS
+========================================================= */
+
+function sortHotels(
+  hotels,
+  sort
+) {
+
+  const results =
+    [...hotels];
+
+
+  switch (sort) {
+
+
+    /* PRICE LOW */
+
+    case 'price-low':
+
+      results.sort(
+        (a, b) =>
+          a.price - b.price
+      );
+
+      break;
+
+
+    /* PRICE HIGH */
+
+    case 'price-high':
+
+      results.sort(
+        (a, b) =>
+          b.price - a.price
+      );
+
+      break;
+
+
+    /* RATING */
+
+    case 'rating':
+
+      results.sort(
+        (a, b) =>
+          b.rating - a.rating
+      );
+
+      break;
+
+
+    /* STARS */
+
+    case 'stars':
+
+      results.sort(
+        (a, b) => {
 
           if (
-            b.stars !== a.stars
+            b.stars !==
+            a.stars
           ) {
 
             return (
@@ -903,7 +707,6 @@ export default async function handler(req, res) {
 
           }
 
-
           return (
             b.rating -
             a.rating
@@ -912,777 +715,835 @@ export default async function handler(req, res) {
         }
       );
 
-    }
+      break;
 
 
-    if (
-      sort === "rating"
-    ) {
+    /* RECOMMENDED */
 
-      hotels.sort(
-        function (a, b) {
+    case 'recommended':
+
+    default:
+
+      results.sort(
+        (a, b) => {
+
+          const aScore =
+            (
+              a.rating * 10
+            ) +
+            (
+              a.stars * 2
+            ) +
+            (
+              a.free_cancellation
+                ? 1
+                : 0
+            );
+
+          const bScore =
+            (
+              b.rating * 10
+            ) +
+            (
+              b.stars * 2
+            ) +
+            (
+              b.free_cancellation
+                ? 1
+                : 0
+            );
 
           return (
-            b.rating -
-            a.rating
+            bScore -
+            aScore
           );
 
         }
       );
 
-    }
+      break;
+
+  }
 
 
-    if (
-      sort === "price-low"
-    ) {
+  return results;
 
-      hotels.sort(
-        function (a, b) {
-
-          return (
-            a.price_per_night -
-            b.price_per_night
-          );
-
-        }
-      );
-
-    }
+}
 
 
-    /*
-     * ---------------------------------------------------
-     * LIMIT
-     * ---------------------------------------------------
-     */
+/* =========================================================
+   GET PARAMETERS
+========================================================= */
 
-    const requestedLimit =
-      Number(limit);
+function getParams(req) {
 
-
-    if (
-      requestedLimit > 0
-    ) {
-
-      hotels =
-        hotels.slice(
-          0,
-          Math.min(
-            requestedLimit,
-            100
-          )
+  const source =
+    req.method === 'POST'
+      ? (
+          req.body &&
+          typeof req.body === 'object'
+            ? req.body
+            : {}
+        )
+      : (
+          req.query ||
+          {}
         );
 
+
+  const destination =
+    clean(
+      source.destination ||
+      source.q ||
+      'Port of Spain'
+    );
+
+
+  const checkIn =
+    clean(
+      source.check_in ||
+      source.check_in_date ||
+      source.checkin
+    );
+
+
+  const checkOut =
+    clean(
+      source.check_out ||
+      source.check_out_date ||
+      source.checkout
+    );
+
+
+  const rooms =
+    Math.max(
+      1,
+      number(
+        source.rooms,
+        1
+      )
+    );
+
+
+  const adults =
+    Math.max(
+      0,
+      number(
+        source.adults,
+        2
+      )
+    );
+
+
+  const children =
+    Math.max(
+      0,
+      number(
+        source.children,
+        0
+      )
+    );
+
+
+  const seniors =
+    Math.max(
+      0,
+      number(
+        source.seniors,
+        0
+      )
+    );
+
+
+  const nextPageToken =
+    clean(
+      source.next_page_token ||
+      source.page_token ||
+      ''
+    );
+
+
+  const sort =
+    clean(
+      source.sort ||
+      'recommended'
+    );
+
+
+  const minPrice =
+    source.min_price !== undefined &&
+    source.min_price !== ''
+      ? number(
+          source.min_price
+        )
+      : null;
+
+
+  const maxPrice =
+    source.max_price !== undefined &&
+    source.max_price !== ''
+      ? number(
+          source.max_price
+        )
+      : null;
+
+
+  const hotelClass =
+    source.hotel_class !== undefined &&
+    source.hotel_class !== ''
+      ? number(
+          source.hotel_class
+        )
+      : null;
+
+
+  const minRating =
+    source.min_rating !== undefined &&
+    source.min_rating !== ''
+      ? number(
+          source.min_rating
+        )
+      : null;
+
+
+  const amenities =
+    arrayFrom(
+      source.amenities
+    );
+
+
+  const freeCancellation =
+    boolean(
+      source.free_cancellation
+    );
+
+
+  const freeBreakfast =
+    boolean(
+      source.free_breakfast
+    );
+
+
+  return {
+
+    destination,
+
+    checkIn,
+
+    checkOut,
+
+    rooms,
+
+    adults,
+
+    children,
+
+    seniors,
+
+    nextPageToken,
+
+    sort,
+
+    minPrice,
+
+    maxPrice,
+
+    hotelClass,
+
+    minRating,
+
+    amenities,
+
+    freeCancellation,
+
+    freeBreakfast
+
+  };
+
+}
+
+
+/* =========================================================
+   API HANDLER
+========================================================= */
+
+export default async function handler(
+  req,
+  res
+) {
+
+  setCors(res);
+
+
+  /* OPTIONS */
+
+  if (
+    req.method === 'OPTIONS'
+  ) {
+
+    return res
+      .status(200)
+      .end();
+
+  }
+
+
+  /* METHOD */
+
+  if (
+    req.method !== 'GET' &&
+    req.method !== 'POST'
+  ) {
+
+    return res
+      .status(405)
+      .json({
+
+        success: false,
+
+        error:
+          'Method not allowed.'
+
+      });
+
+  }
+
+
+  /* API KEY */
+
+  const apiKey =
+    process.env.SERPAPI_API_KEY;
+
+
+  if (!apiKey) {
+
+    return res
+      .status(500)
+      .json({
+
+        success: false,
+
+        error:
+          'SERPAPI_API_KEY is not configured.'
+
+      });
+
+  }
+
+
+  try {
+
+    const params =
+      getParams(req);
+
+
+    /* DATE VALIDATION */
+
+    if (
+      !isValidDate(
+        params.checkIn
+      )
+    ) {
+
+      return res
+        .status(400)
+        .json({
+
+          success: false,
+
+          error:
+            'check_in_date must use YYYY-MM-DD.'
+
+        });
+
+    }
+
+
+    if (
+      !isValidDate(
+        params.checkOut
+      )
+    ) {
+
+      return res
+        .status(400)
+        .json({
+
+          success: false,
+
+          error:
+            'check_out_date must use YYYY-MM-DD.'
+
+        });
+
+    }
+
+
+    /* =====================================================
+       SERPAPI REQUEST
+    ===================================================== */
+
+    const serpParams =
+      new URLSearchParams();
+
+
+    serpParams.set(
+      'engine',
+      'google_hotels'
+    );
+
+
+    serpParams.set(
+      'api_key',
+      apiKey
+    );
+
+
+    serpParams.set(
+      'q',
+      params.destination
+    );
+
+
+    serpParams.set(
+      'check_in_date',
+      params.checkIn
+    );
+
+
+    serpParams.set(
+      'check_out_date',
+      params.checkOut
+    );
+
+
+    serpParams.set(
+      'adults',
+      String(
+        params.adults
+      )
+    );
+
+
+    serpParams.set(
+      'children',
+      String(
+        params.children
+      )
+    );
+
+
+    serpParams.set(
+      'rooms',
+      String(
+        params.rooms
+      )
+    );
+
+
+    serpParams.set(
+      'currency',
+      'USD'
+    );
+
+
+    serpParams.set(
+      'hl',
+      'en'
+    );
+
+
+    serpParams.set(
+      'gl',
+      'us'
+    );
+
+
+    /*
+     * SerpApi's Google Hotels response
+     * provides up to 20 properties on
+     * a result page.
+     */
+
+    serpParams.set(
+      'num',
+      '20'
+    );
+
+
+    /*
+     * Pagination
+     */
+
+    if (
+      params.nextPageToken
+    ) {
+
+      serpParams.set(
+        'next_page_token',
+        params.nextPageToken
+      );
+
     }
 
 
     /*
-     * ---------------------------------------------------
-     * RESPONSE
-     * ---------------------------------------------------
+     * SerpApi native price filters.
+     *
+     * These reduce unnecessary
+     * properties before we normalize.
      */
 
-    return res.status(200).json({
+    if (
+      params.minPrice !== null
+    ) {
 
-      success: true,
+      serpParams.set(
+        'min_price',
+        String(
+          params.minPrice
+        )
+      );
 
-      destination:
-        searchQuery,
+    }
 
-      search: {
 
-        check_in_date:
-          check_in_date || null,
+    if (
+      params.maxPrice !== null
+    ) {
 
-        check_out_date:
-          check_out_date || null,
+      serpParams.set(
+        'max_price',
+        String(
+          params.maxPrice
+        )
+      );
 
-        adults:
-          Number(adults),
+    }
 
-        children:
-          Number(children),
 
-        rooms:
-          Number(rooms)
+    if (
+      params.hotelClass !== null
+    ) {
 
-      },
+      serpParams.set(
+        'hotel_class',
+        String(
+          params.hotelClass
+        )
+      );
 
-      count:
-        hotels.length,
+    }
 
-      next_page_token:
-        data.next_page_token ||
-        null,
 
-      hotels,
+    const url =
+      `${SERPAPI_URL}?${serpParams.toString()}`;
 
-      /*
-       * Useful when debugging SerpApi
-       * without exposing the API key.
-       */
 
-      meta: {
+    /* =====================================================
+       FETCH SERPAPI
+    ===================================================== */
 
-        search_id:
-          data.search_metadata?.id ||
-          null,
+    const response =
+      await fetch(url);
 
-        status:
-          data.search_metadata?.status ||
-          null
 
-      }
+    const data =
+      await response.json();
 
-    });
+
+    if (
+      !response.ok
+    ) {
+
+      return res
+        .status(
+          response.status
+        )
+        .json({
+
+          success: false,
+
+          error:
+            data.error ||
+            'SerpApi request failed.',
+
+          serpapi:
+            data
+
+        });
+
+    }
+
+
+    if (
+      data.error
+    ) {
+
+      return res
+        .status(400)
+        .json({
+
+          success: false,
+
+          error:
+            data.error,
+
+          serpapi:
+            data
+
+        });
+
+    }
+
+
+    /* =====================================================
+       NORMALIZE PROPERTIES
+    ===================================================== */
+
+    const rawProperties =
+      Array.isArray(
+        data.properties
+      )
+        ? data.properties
+        : [];
+
+
+    let hotels =
+      rawProperties.map(
+        (hotel, index) =>
+          normalizeHotel(
+            hotel,
+            index
+          )
+      );
+
+
+    /* =====================================================
+       FILTER
+    ===================================================== */
+
+    hotels =
+      filterHotels(
+        hotels,
+        {
+
+          min_price:
+            params.minPrice,
+
+          max_price:
+            params.maxPrice,
+
+          hotel_class:
+            params.hotelClass,
+
+          min_rating:
+            params.minRating,
+
+          amenities:
+            params.amenities,
+
+          free_cancellation:
+            params.freeCancellation,
+
+          free_breakfast:
+            params.freeBreakfast
+
+        }
+      );
+
+
+    /* =====================================================
+       SORT
+    ===================================================== */
+
+    hotels =
+      sortHotels(
+        hotels,
+        params.sort
+      );
+
+
+    /*
+     * Always expose a maximum
+     * of 20 cards to Shopify.
+     */
+
+    hotels =
+      hotels.slice(
+        0,
+        20
+      );
+
+
+    /* =====================================================
+       PAGINATION
+    ===================================================== */
+
+    const pagination =
+      data.serpapi_pagination ||
+      {};
+
+
+    const nextPageToken =
+      clean(
+        pagination.next_page_token
+      ) || null;
+
+
+    /*
+     * SerpApi does not require us
+     * to maintain a server-side
+     * session.
+     *
+     * Shopify stores the token
+     * for each page.
+     */
+
+    const hasNextPage =
+      Boolean(
+        nextPageToken
+      );
+
+
+    /* =====================================================
+       RESPONSE
+    ===================================================== */
+
+    return res
+      .status(200)
+      .json({
+
+        success: true,
+
+        engine:
+          'google_hotels',
+
+        destination:
+          params.destination,
+
+        search: {
+
+          destination:
+            params.destination,
+
+          check_in:
+            params.checkIn,
+
+          check_out:
+            params.checkOut,
+
+          rooms:
+            params.rooms,
+
+          adults:
+            params.adults,
+
+          children:
+            params.children,
+
+          seniors:
+            params.seniors
+
+        },
+
+        filters: {
+
+          min_price:
+            params.minPrice,
+
+          max_price:
+            params.maxPrice,
+
+          hotel_class:
+            params.hotelClass,
+
+          min_rating:
+            params.minRating,
+
+          amenities:
+            params.amenities,
+
+          free_cancellation:
+            params.freeCancellation,
+
+          free_breakfast:
+            params.freeBreakfast
+
+        },
+
+        sort:
+          params.sort,
+
+        results: hotels,
+
+        properties:
+          hotels,
+
+        count:
+          hotels.length,
+
+        page_size:
+          20,
+
+        pagination: {
+
+          current:
+            pagination.current ||
+            null,
+
+          current_from:
+            pagination.current_from ||
+            null,
+
+          current_to:
+            pagination.current_to ||
+            null,
+
+          next_page_token:
+            nextPageToken,
+
+          has_next_page:
+            hasNextPage
+
+        },
+
+        serpapi: {
+
+          search_metadata:
+            data.search_metadata ||
+            null,
+
+          search_parameters:
+            data.search_parameters ||
+            null
+
+        }
+
+      });
 
   }
 
   catch (error) {
 
     console.error(
-      "Bokkara Hotels API Error:",
+      'BOKKARA HOTEL API ERROR:',
       error
     );
 
 
-    return res.status(500).json({
+    return res
+      .status(500)
+      .json({
 
-      success: false,
+        success: false,
 
-      error:
-        "Unable to retrieve hotel results.",
+        error:
+          error.message ||
+          'Unable to retrieve hotel results.'
 
-      message:
-        error.message
-
-    });
-
-  }
-
-}
-
-
-/*
- * =========================================================
- * HOTEL NORMALIZER
- * =========================================================
- */
-
-function normalizeHotel(
-  hotel,
-  index,
-  destination
-) {
-
-  /*
-   * -------------------------------------------------------
-   * PRICE
-   * -------------------------------------------------------
-   */
-
-  const rate =
-    hotel.rate_per_night || {};
-
-
-  const totalRate =
-    hotel.total_rate || {};
-
-
-  const nightlyPrice =
-    Number(
-      rate.extracted_lowest ||
-      rate.extracted_before_taxes_fees ||
-      0
-    );
-
-
-  const totalPrice =
-    Number(
-      totalRate.extracted_lowest ||
-      0
-    );
-
-
-  const originalPrice =
-    Number(
-      rate.extracted_before_taxes_fees ||
-      0
-    );
-
-
-  /*
-   * -------------------------------------------------------
-   * STARS
-   * -------------------------------------------------------
-   */
-
-  let stars =
-    Number(
-      hotel.extracted_hotel_class ||
-      0
-    );
-
-
-  if (!stars && hotel.hotel_class) {
-
-    const match =
-      String(
-        hotel.hotel_class
-      ).match(
-        /(\d+)/
-      );
-
-
-    if (match) {
-
-      stars =
-        Number(
-          match[1]
-        );
-
-    }
+      });
 
   }
-
-
-  /*
-   * -------------------------------------------------------
-   * RATING
-   * -------------------------------------------------------
-   */
-
-  const rating =
-    Number(
-      hotel.overall_rating ||
-      0
-    );
-
-
-  /*
-   * -------------------------------------------------------
-   * REVIEWS
-   * -------------------------------------------------------
-   */
-
-  const reviews =
-    Number(
-      hotel.reviews ||
-      0
-    );
-
-
-  /*
-   * -------------------------------------------------------
-   * IMAGES
-   * -------------------------------------------------------
-   */
-
-  const images =
-    Array.isArray(
-      hotel.images
-    )
-      ? hotel.images
-          .map(function (image) {
-
-            return (
-              image.original_image ||
-              image.thumbnail ||
-              null
-            );
-
-          })
-          .filter(Boolean)
-      : [];
-
-
-  const primaryImage =
-    images[0] ||
-    hotel.thumbnail ||
-    hotel.image ||
-    "";
-
-
-  /*
-   * -------------------------------------------------------
-   * AMENITIES
-   * -------------------------------------------------------
-   */
-
-  const rawAmenities =
-    Array.isArray(
-      hotel.amenities
-    )
-      ? hotel.amenities
-      : [];
-
-
-  const amenities =
-    rawAmenities.map(
-      function (item) {
-
-        if (
-          typeof item === "string"
-        ) {
-
-          return item;
-
-        }
-
-
-        if (
-          item &&
-          typeof item.name === "string"
-        ) {
-
-          return item.name;
-
-        }
-
-
-        return "";
-
-      }
-    )
-      .filter(Boolean);
-
-
-  const normalizedAmenities =
-    amenities.map(
-      function (item) {
-
-        return item
-          .toLowerCase()
-          .trim();
-
-      }
-    );
-
-
-  /*
-   * -------------------------------------------------------
-   * AMENITY KEYS
-   * -------------------------------------------------------
-   */
-
-  const amenityKeys = [];
-
-
-  normalizedAmenities.forEach(
-    function (amenity) {
-
-      if (
-        amenity.includes("wi-fi") ||
-        amenity.includes("wifi") ||
-        amenity.includes("internet")
-      ) {
-
-        amenityKeys.push(
-          "wifi"
-        );
-
-      }
-
-
-      if (
-        amenity.includes("pool") ||
-        amenity.includes("swimming")
-      ) {
-
-        amenityKeys.push(
-          "pool"
-        );
-
-      }
-
-
-      if (
-        amenity.includes("parking") ||
-        amenity.includes("car park")
-      ) {
-
-        amenityKeys.push(
-          "parking"
-        );
-
-      }
-
-
-      if (
-        amenity.includes("restaurant") ||
-        amenity.includes("dining")
-      ) {
-
-        amenityKeys.push(
-          "restaurant"
-        );
-
-      }
-
-
-      if (
-        amenity.includes("gym") ||
-        amenity.includes("fitness")
-      ) {
-
-        amenityKeys.push(
-          "gym"
-        );
-
-      }
-
-    }
-  );
-
-
-  /*
-   * Remove duplicates.
-   */
-
-  const uniqueAmenityKeys =
-    Array.from(
-      new Set(
-        amenityKeys
-      )
-    );
-
-
-  /*
-   * -------------------------------------------------------
-   * LOCATION
-   * -------------------------------------------------------
-   */
-
-  const address =
-    hotel.address ||
-    hotel.location ||
-    destination;
-
-
-  /*
-   * -------------------------------------------------------
-   * FREE CANCELLATION
-   * -------------------------------------------------------
-   */
-
-  const freeCancellation =
-    Boolean(
-      hotel.free_cancellation
-    ) ||
-    Boolean(
-      hotel.free_cancellation_policy
-    ) ||
-    Boolean(
-      hotel.cancellation_policy
-    ) ||
-    Boolean(
-      hotel.rate_per_night?.free_cancellation
-    );
-
-
-  /*
-   * -------------------------------------------------------
-   * RATING LABEL
-   * -------------------------------------------------------
-   */
-
-  let ratingLabel =
-    "";
-
-
-  if (rating >= 9) {
-
-    ratingLabel =
-      "Exceptional";
-
-  }
-
-  else if (rating >= 8) {
-
-    ratingLabel =
-      "Excellent";
-
-  }
-
-  else if (rating >= 7) {
-
-    ratingLabel =
-      "Good";
-
-  }
-
-  else if (rating >= 6) {
-
-    ratingLabel =
-      "Pleasant";
-
-  }
-
-  else if (rating > 0) {
-
-    ratingLabel =
-      "Rated";
-
-  }
-
-
-  /*
-   * -------------------------------------------------------
-   * DEAL
-   * -------------------------------------------------------
-   */
-
-  const deal =
-    hotel.deal ||
-    "";
-
-
-  const dealDescription =
-    hotel.deal_description ||
-    "";
-
-
-  /*
-   * -------------------------------------------------------
-   * PROPERTY TOKEN
-   * -------------------------------------------------------
-   */
-
-  const propertyToken =
-    hotel.property_token ||
-    null;
-
-
-  /*
-   * -------------------------------------------------------
-   * GPS
-   * -------------------------------------------------------
-   */
-
-  const gps =
-    hotel.gps_coordinates || {};
-
-
-  /*
-   * -------------------------------------------------------
-   * SOURCE PRICES
-   * -------------------------------------------------------
-   */
-
-  const prices =
-    Array.isArray(
-      hotel.prices
-    )
-      ? hotel.prices.map(
-          function (price) {
-
-            return {
-
-              source:
-                price.source ||
-                "",
-
-              logo:
-                price.logo ||
-                "",
-
-              link:
-                price.link ||
-                null,
-
-              rate_per_night:
-                price.rate_per_night ||
-                null,
-
-              total_rate:
-                price.total_rate ||
-                null
-
-            };
-
-          }
-        )
-      : [];
-
-
-  /*
-   * -------------------------------------------------------
-   * RETURN FRONTEND OBJECT
-   * -------------------------------------------------------
- */
-
-  return {
-
-    id:
-      propertyToken ||
-      `hotel-${index + 1}`,
-
-    property_token:
-      propertyToken,
-
-    position:
-      index + 1,
-
-    type:
-      hotel.type ||
-      "hotel",
-
-    name:
-      hotel.name ||
-      "Hotel",
-
-    description:
-      hotel.description ||
-      "",
-
-    address,
-
-    destination,
-
-    stars,
-
-    hotel_class:
-      hotel.hotel_class ||
-      `${stars}-star hotel`,
-
-    rating,
-
-    rating_label:
-      ratingLabel,
-
-    reviews,
-
-    review_count:
-      reviews,
-
-    location_rating:
-      Number(
-        hotel.location_rating ||
-        0
-      ),
-
-    price_per_night:
-      nightlyPrice,
-
-    price_per_night_formatted:
-      rate.lowest ||
-      "",
-
-    price_before_taxes:
-      originalPrice,
-
-    price_before_taxes_formatted:
-      rate.before_taxes_fees ||
-      "",
-
-    total_price:
-      totalPrice,
-
-    total_price_formatted:
-      totalRate.lowest ||
-      "",
-
-    total_price_before_taxes:
-      Number(
-        totalRate.extracted_before_taxes_fees ||
-        0
-      ),
-
-    total_price_before_taxes_formatted:
-      totalRate.before_taxes_fees ||
-      "",
-
-    images,
-
-    image:
-      primaryImage,
-
-    image_count:
-      images.length,
-
-    thumbnail:
-      hotel.images?.[0]?.thumbnail ||
-      primaryImage,
-
-    amenities,
-
-    amenity_keys:
-      uniqueAmenityKeys,
-
-    free_cancellation:
-      freeCancellation,
-
-    free_cancellation_text:
-      freeCancellation
-        ? "Free cancellation"
-        : "",
-
-    deal,
-
-    deal_description:
-      dealDescription,
-
-    sponsored:
-      Boolean(
-        hotel.sponsored
-      ),
-
-    logo:
-      hotel.logo ||
-      "",
-
-    gps: {
-
-      latitude:
-        Number(
-          gps.latitude ||
-          0
-        ),
-
-      longitude:
-        Number(
-          gps.longitude ||
-          0
-        )
-
-    },
-
-    check_in_time:
-      hotel.check_in_time ||
-      "",
-
-    check_out_time:
-      hotel.check_out_time ||
-      "",
-
-    nearby_places:
-      Array.isArray(
-        hotel.nearby_places
-      )
-        ? hotel.nearby_places
-        : [],
-
-    prices,
-
-    ratings:
-      Array.isArray(
-        hotel.ratings
-      )
-        ? hotel.ratings
-        : [],
-
-    reviews_breakdown:
-      Array.isArray(
-        hotel.reviews_breakdown
-      )
-        ? hotel.reviews_breakdown
-        : [],
-
-    link:
-      hotel.link ||
-      null
-
-  };
 
 }
