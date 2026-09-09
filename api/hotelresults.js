@@ -5,27 +5,33 @@
  *
  * Backend proxy for SerpApi Google Hotels.
  *
- * PAGINATION:
+ * INFINITE SCROLL PAGINATION:
  *
- * offset=0
- *   -> return qualifying properties 1-50
+ * First request:
  *
- * offset=50
- *   -> skip qualifying properties 1-50
- *   -> return qualifying properties 51-100
+ *   offset=0
+ *   -> return up to 20 qualifying properties
  *
- * offset=100
- *   -> skip qualifying properties 1-100
- *   -> return qualifying properties 101-150
+ * Second request:
+ *
+ *   offset=20
+ *   -> return the next 20 qualifying properties
+ *
+ * Third request:
+ *
+ *   offset=40
+ *   -> return the next 20 qualifying properties
  *
  * IMPORTANT:
  *
- * SerpApi does NOT use numeric offsets.
+ * SerpApi normally returns around 20 properties per request.
  *
- * SerpApi uses next_page_token.
+ * This backend keeps following SerpApi next_page_token values
+ * when necessary and returns exactly ONE Bokkara batch at a
+ * time.
  *
- * This backend converts the numeric Bokkara offset into
- * SerpApi pagination automatically.
+ * The frontend can then append each batch to the existing
+ * hotel list when the user reaches the bottom.
  *
  * =========================================================
  *
@@ -41,7 +47,9 @@
  *   &check_out_date=2026-09-18
  *   &adults=2
  *   &rooms=1
- *   &offset=50
+ *   &offset=0
+ *
+ * =========================================================
  *
  * Environment variable required:
  *
@@ -203,22 +211,27 @@ export default async function handler(req, res) {
 
   /*
    * =======================================================
-   * NUMERIC PAGINATION
+   * BOKKARA PAGINATION
    * =======================================================
    *
-   * Bokkara uses:
+   * Bokkara loads hotels in batches of 20.
    *
    * offset=0
-   * offset=50
-   * offset=100
+   *   -> hotels 1-20
    *
-   * SerpApi uses:
+   * offset=20
+   *   -> hotels 21-40
    *
-   * page 1
-   * next_page_token
-   * next_page_token
+   * offset=40
+   *   -> hotels 41-60
    *
-   * We translate between the two.
+   * offset=60
+   *   -> hotels 61-80
+   *
+   * etc.
+   *
+   * The frontend can call this endpoint whenever the user
+   * reaches the bottom of the current results.
    */
 
   const requestedOffset =
@@ -232,12 +245,15 @@ export default async function handler(req, res) {
 
 
   /*
-   * Fixed number of hotels returned per
-   * Bokkara page.
+   * -------------------------------------------------------
+   * FIXED BATCH SIZE
+   * -------------------------------------------------------
+   *
+   * Each API request returns UP TO 20 hotels.
    */
 
   const requestedLimit =
-    50;
+    20;
 
 
   /*
@@ -245,22 +261,16 @@ export default async function handler(req, res) {
    * SERPAPI PAGE SAFETY
    * -------------------------------------------------------
    *
-   * A single SerpApi request normally returns around
-   * 20 properties.
+   * A SerpApi Google Hotels response normally contains
+   * around 20 properties.
    *
-   * For large offsets we may need several requests.
+   * We allow multiple SerpApi requests when necessary.
    *
-   * Example:
+   * This is especially important when:
    *
-   * offset=50
-   *
-   * could require:
-   *
-   * SerpApi page 1
-   * SerpApi page 2
-   * SerpApi page 3
-   *
-   * before the next 50 properties are collected.
+   * - duplicate properties appear
+   * - properties fail our quality checks
+   * - a requested offset is being skipped
    */
 
   const MAX_SERPAPI_PAGES =
@@ -625,8 +635,7 @@ export default async function handler(req, res) {
 
 
   /*
-   * Number of qualifying properties skipped
-   * because of the requested offset.
+   * Number of qualifying properties skipped.
    */
 
   let qualifyingPropertiesSkipped =
@@ -634,7 +643,7 @@ export default async function handler(req, res) {
 
 
   /*
-   * Properties that will eventually be returned.
+   * Hotels returned in THIS batch only.
    */
 
   let allUsableProperties =
@@ -650,8 +659,7 @@ export default async function handler(req, res) {
 
 
   /*
-   * The token returned by the LAST SerpApi page
-   * that we successfully processed.
+   * Token for the next batch.
    */
 
   let lastNextPageToken =
@@ -659,7 +667,7 @@ export default async function handler(req, res) {
 
 
   /*
-   * True when SerpApi has no more pages.
+   * True when there are no more SerpApi pages.
    */
 
   let reachedEnd =
@@ -681,7 +689,7 @@ export default async function handler(req, res) {
 
     /*
      * -----------------------------------------------------
-     * CREATE REQUEST PARAMETERS FOR THIS PAGE
+     * CREATE PARAMETERS FOR CURRENT SERPAPI PAGE
      * -----------------------------------------------------
      */
 
@@ -693,7 +701,7 @@ export default async function handler(req, res) {
 
     /*
      * -----------------------------------------------------
-     * SERPAPI NEXT PAGE TOKEN
+     * NEXT PAGE TOKEN
      * -----------------------------------------------------
      */
 
@@ -802,7 +810,7 @@ export default async function handler(req, res) {
      * -----------------------------------------------------
      * SERPAPI API ERROR
      * -----------------------------------------------------
-     */
+ */
 
     if (data.error) {
 
@@ -833,18 +841,9 @@ export default async function handler(req, res) {
 
 
     /*
-     * =====================================================
-     * GET NEXT PAGE TOKEN IMMEDIATELY
-     * =====================================================
-     *
-     * IMPORTANT:
-     *
-     * We capture this BEFORE checking whether we've
-     * collected 50 properties.
-     *
-     * This fixes the old behavior where the backend
-     * could stop at 50 and accidentally lose the token
-     * needed for the next page.
+     * -----------------------------------------------------
+     * GET NEXT PAGE TOKEN
+     * -----------------------------------------------------
      */
 
     const pageNextToken =
@@ -854,7 +853,7 @@ export default async function handler(req, res) {
 
     /*
      * =====================================================
-     * PROCESS SERPAPI PAGE
+     * PROCESS PROPERTIES
      * =====================================================
      */
 
@@ -864,7 +863,7 @@ export default async function handler(req, res) {
 
       /*
        * ---------------------------------------------------
-       * DUPLICATE PROPERTY KEY
+       * PROPERTY KEY
        * ---------------------------------------------------
        */
 
@@ -908,13 +907,11 @@ export default async function handler(req, res) {
        * QUALITY FILTER
        * ===================================================
        *
-       * The hotel must have:
+       * A hotel must have:
        *
-       * 1. Valid price
-       * 2. Valid image
-       * 3. Valid star rating
-       *
-       * Only qualifying properties count toward offset.
+       * 1. Price
+       * 2. Image
+       * 3. Star rating
        */
 
       const rate =
@@ -1004,7 +1001,7 @@ export default async function handler(req, res) {
               starMatch[1]
             );
 
-          }
+        }
 
       }
 
@@ -1025,21 +1022,14 @@ export default async function handler(req, res) {
         !hasStars
       ) {
 
-        /*
-         * IMPORTANT:
-         *
-         * Non-qualifying properties DO NOT count
-         * toward the numeric offset.
-         */
-
         continue;
 
       }
 
 
       /*
-       * This property is now considered a unique
-       * qualifying property.
+       * Mark as seen ONLY after it passes
+       * the quality filter.
        */
 
       seenProperties.add(
@@ -1052,18 +1042,18 @@ export default async function handler(req, res) {
        * OFFSET HANDLING
        * ===================================================
        *
-       * Example:
+       * IMPORTANT:
        *
-       * offset=50
+       * offset=0
+       *   -> nothing skipped
        *
-       * First 50 qualifying properties:
+       * offset=20
+       *   -> first 20 qualifying hotels skipped
        *
-       *   skipped
+       * offset=40
+       *   -> first 40 qualifying hotels skipped
        *
-       * Property #51 onward:
-       *
-       *   returned
-       * ===================================================
+       * etc.
        */
 
       if (
@@ -1080,7 +1070,7 @@ export default async function handler(req, res) {
 
       /*
        * ===================================================
-       * ADD TO CURRENT RESPONSE PAGE
+       * ADD HOTEL TO CURRENT BATCH
        * ===================================================
        */
 
@@ -1090,7 +1080,7 @@ export default async function handler(req, res) {
 
 
       /*
-       * We have our 50-property page.
+       * Stop once we have 20.
        */
 
       if (
@@ -1107,7 +1097,7 @@ export default async function handler(req, res) {
 
     /*
      * =====================================================
-     * HAVE 50 RESULTS?
+     * CURRENT BATCH COMPLETE
      * =====================================================
      */
 
@@ -1117,12 +1107,8 @@ export default async function handler(req, res) {
     ) {
 
       /*
-       * IMPORTANT:
-       *
-       * Save the token from THIS SerpApi page.
-       *
-       * The next request can use it to continue after
-       * the page containing the final returned hotel.
+       * The next SerpApi token allows the frontend/backend
+       * to continue from the following SerpApi page.
        */
 
       lastNextPageToken =
@@ -1135,7 +1121,7 @@ export default async function handler(req, res) {
 
     /*
      * =====================================================
-     * NO MORE SERPAPI PAGES
+     * NO MORE SERPAPI RESULTS
      * =====================================================
      */
 
@@ -1198,15 +1184,6 @@ export default async function handler(req, res) {
   /*
    * =======================================================
    * LOCAL AMENITY FILTER
-   * =======================================================
-   *
-   * Kept exactly as before.
-   *
-   * NOTE:
-   *
-   * These local filters happen AFTER pagination.
-   *
-   * This preserves the existing behavior of your API.
    * =======================================================
    */
 
@@ -1456,6 +1433,8 @@ export default async function handler(req, res) {
    * =======================================================
    * FINAL LIMIT
    * =======================================================
+   *
+   * Never return more than 20 hotels in one request.
    */
 
   hotels =
@@ -1469,17 +1448,6 @@ export default async function handler(req, res) {
    * =======================================================
    * HAS MORE
    * =======================================================
-   *
-   * If we successfully reached the requested 50 and
-   * SerpApi gave us another token, there may be more.
-   *
-   * If SerpApi has no token, we've reached the end.
-   *
-   * IMPORTANT:
-   *
-   * next_offset is based on the number of qualifying
-   * properties actually returned.
-   * =======================================================
    */
 
   const hasMore =
@@ -1488,6 +1456,20 @@ export default async function handler(req, res) {
     ) &&
     !reachedEnd;
 
+
+  /*
+   * =======================================================
+   * NEXT OFFSET
+   * =======================================================
+   *
+   * Always advance by the number actually returned.
+   *
+   * Normal case:
+   *
+   * 0 + 20 = 20
+   * 20 + 20 = 40
+   * 40 + 20 = 60
+   */
 
   const nextOffset =
     hasMore
@@ -1618,10 +1600,6 @@ export default async function handler(req, res) {
 /*
  * =========================================================
  * SERPAPI SEARCH ID HELPER
- * =========================================================
- *
- * Kept separate so the normalizer/API remains safe if
- * SerpApi metadata changes.
  * =========================================================
  */
 
@@ -2027,7 +2005,7 @@ function normalizeHotel(
    * -------------------------------------------------------
    * PROPERTY TOKEN
    * -------------------------------------------------------
-   */
+ */
 
   const propertyToken =
     hotel.property_token ||
@@ -2091,7 +2069,7 @@ function normalizeHotel(
    * -------------------------------------------------------
    * RETURN FRONTEND OBJECT
    * -------------------------------------------------------
-   */
+ */
 
   return {
 
