@@ -1,96 +1,64 @@
 
 /*
 ========================================================
-BOKKARA — HOTEL RESULTS BACKEND
-20 PROPERTIES PER REQUEST
-TRUE INFINITE SCROLL
+BOKKARA HOTEL RESULTS BACKEND
+File: api/hotelresults.js
 
-FILE: api/hotelresults.js
-
-API BEHAVIOR:
-- One Shopify request per batch
+- Up to 20 hotels per request
 - One SerpApi request per batch
-- Maximum 20 properties returned
-- No additional property-details requests
-- No automatic address-enrichment requests
-- Supports next-page tokens when provided
-- Preserves hotel data for frontend cards
-
-REQUIRED ENVIRONMENT VARIABLE:
-SERPAPI_API_KEY
-
-OPTIONAL:
-BOKKARA_SEARCH_TIMEOUT_MS
+- Improved property address extraction
+- Supports nested and structured addresses
+- No separate hotel-details requests
+- Preserves Shopify frontend response fields
 ========================================================
 */
 
-const SERPAPI_URL =
-  "https://serpapi.com/search.json";
-
+const SERPAPI_URL = "https://serpapi.com/search.json";
 const PAGE_SIZE = 20;
-
-const SEARCH_TIMEOUT = Number(
+const TIMEOUT = Number(
   process.env.BOKKARA_SEARCH_TIMEOUT_MS || 20000
 );
 
-
-/* =====================================================
-   GENERAL HELPERS
-===================================================== */
+/* =========================
+   HELPERS
+========================= */
 
 function first(...values) {
   return values.find(
-    value =>
-      value !== undefined &&
-      value !== null &&
-      value !== ""
+    v => v !== undefined && v !== null && v !== ""
   ) ?? null;
 }
 
-function txt(value) {
-  if (
-    value === undefined ||
-    value === null ||
-    typeof value === "object"
-  ) {
+function text(value) {
+  if (value == null || typeof value === "object") {
     return "";
   }
 
   const result = String(value).trim();
 
-  if (
-    /^(undefined|null|nan|\[object object\])$/i
-      .test(result)
-  ) {
-    return "";
-  }
-
-  return result;
+  return /^(undefined|null|nan|\[object object\])$/i
+    .test(result)
+    ? ""
+    : result;
 }
 
-function obj(value) {
-  return (
-    value &&
+function object(value) {
+  return value &&
     typeof value === "object" &&
     !Array.isArray(value)
-  ) ? value : {};
+    ? value
+    : {};
 }
 
-function arr(value) {
+function array(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function num(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return null;
-  }
+function number(value) {
+  if (value == null || value === "") return null;
 
   if (typeof value === "object") {
-    return num(first(
+    return number(first(
       value.extracted_lowest,
       value.extracted_price,
       value.amount,
@@ -99,86 +67,60 @@ function num(value) {
     ));
   }
 
-  const result = Number(
+  const n = Number(
     String(value).replace(/[^0-9.-]/g, "")
   );
 
-  return Number.isFinite(result)
-    ? result
-    : null;
+  return Number.isFinite(n) ? n : null;
 }
 
 function unique(values) {
-  return [
-    ...new Set(values.filter(Boolean))
-  ];
-}
-
-function validURL(value) {
-  const result = txt(value);
-
-  return /^https?:\/\//i.test(result)
-    ? result
-    : "";
-}
-
-function bool(value) {
-  return (
-    value === true ||
-    value === 1 ||
-    String(value).toLowerCase() === "true"
-  );
+  return [...new Set(values.filter(Boolean))];
 }
 
 function clamp(value, min, max, fallback) {
-  const result = num(value);
+  const n = number(value);
 
-  return result === null
+  return n === null
     ? fallback
-    : Math.max(
-        min,
-        Math.min(max, Math.trunc(result))
-      );
+    : Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
+function boolean(value) {
+  return value === true ||
+    value === 1 ||
+    String(value).toLowerCase() === "true";
+}
 
-/* =====================================================
-   DATE NORMALIZATION
-===================================================== */
+function validURL(value) {
+  const s = text(value);
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
+/* =========================
+   DATE HANDLING
+========================= */
 
 function normalizeDate(value) {
-  const input = txt(value);
-
+  const input = text(value);
   if (!input) return "";
 
-  let year;
-  let month;
-  let day;
+  let year, month, day;
 
-  if (
-    /^\d{4}-\d{2}-\d{2}$/.test(input)
-  ) {
-    [year, month, day] =
-      input.split("-").map(Number);
-
-  } else if (
-    /^\d{2}\/\d{2}\/\d{4}$/.test(input)
-  ) {
-    [day, month, year] =
-      input.split("/").map(Number);
-
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    [year, month, day] = input.split("-").map(Number);
+  } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(input)) {
+    [day, month, year] = input.split("/").map(Number);
   } else {
-    const date = new Date(input);
+    const parsed = new Date(input);
 
-    if (
-      !Number.isFinite(date.getTime())
-    ) {
+    if (!Number.isFinite(parsed.getTime())) {
       return "";
     }
 
-    year = date.getUTCFullYear();
-    month = date.getUTCMonth() + 1;
-    day = date.getUTCDate();
+    year = parsed.getUTCFullYear();
+    month = parsed.getUTCMonth() + 1;
+    day = parsed.getUTCDate();
   }
 
   const check = new Date(
@@ -200,22 +142,21 @@ function normalizeDate(value) {
   ].join("-");
 }
 
-
-/* =====================================================
+/* =========================
    SEARCH PARAMETERS
-===================================================== */
+========================= */
 
 function parseSearch(req) {
-  const source =
-    req.method === "POST"
-      ? obj(req.body)
-      : obj(req.query);
+  const source = req.method === "POST"
+    ? object(req.body)
+    : object(req.query);
 
-  const currency =
-    txt(source.currency).toUpperCase();
+  const currency = text(
+    source.currency
+  ).toUpperCase();
 
   return {
-    destination: txt(first(
+    destination: text(first(
       source.destination,
       source.q,
       source.location
@@ -233,30 +174,15 @@ function parseSearch(req) {
       source.checkOut
     )),
 
-    rooms: clamp(
-      source.rooms, 1, 10, 1
-    ),
+    rooms: clamp(source.rooms, 1, 10, 1),
+    adults: clamp(source.adults, 1, 40, 1),
+    children: clamp(source.children, 0, 40, 0),
+    babies: clamp(source.babies, 0, 40, 0),
+    seniors: clamp(source.seniors, 0, 40, 0),
 
-    adults: clamp(
-      source.adults, 1, 40, 1
-    ),
-
-    children: clamp(
-      source.children, 0, 40, 0
-    ),
-
-    babies: clamp(
-      source.babies, 0, 40, 0
-    ),
-
-    seniors: clamp(
-      source.seniors, 0, 40, 0
-    ),
-
-    currency:
-      /^[A-Z]{3}$/.test(currency)
-        ? currency
-        : "USD",
+    currency: /^[A-Z]{3}$/.test(currency)
+      ? currency
+      : "USD",
 
     limit: clamp(
       source.limit,
@@ -265,175 +191,211 @@ function parseSearch(req) {
       PAGE_SIZE
     ),
 
-    page_token: txt(first(
+    page_token: text(first(
       source.page_token,
       source.next_page_token
     )),
 
-    sort:
-      txt(source.sort) || "recommended"
+    sort: text(source.sort) || "recommended"
   };
 }
 
 function validateSearch(q) {
   if (!q.destination) {
-    throw new Error(
-      "Destination is required."
-    );
+    throw new Error("Destination is required.");
   }
 
-  if (
-    !q.check_in_date ||
-    !q.check_out_date
-  ) {
+  if (!q.check_in_date || !q.check_out_date) {
     throw new Error(
       "Valid check-in and check-out dates are required."
     );
   }
 
-  if (
-    q.check_out_date <= q.check_in_date
-  ) {
+  if (q.check_out_date <= q.check_in_date) {
     throw new Error(
       "Check-out must be after check-in."
     );
   }
 }
 
-
-/* =====================================================
-   PROPERTY ADDRESS EXTRACTION
-===================================================== */
+/* =========================
+   ADDRESS EXTRACTION
+========================= */
 
 function cleanAddress(value) {
-  if (!value) return "";
-
   if (typeof value === "string") {
-    return txt(
-      value.replace(/\s+/g, " ")
-    );
+    return text(value.replace(/\s+/g, " "));
   }
 
-  const data = obj(value);
+  if (Array.isArray(value)) {
+    return value
+      .map(cleanAddress)
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  const d = object(value);
 
   const formatted = first(
-    data.formatted_address,
-    data.formattedAddress,
-    data.full_address,
-    data.fullAddress
+    d.formatted_address,
+    d.formattedAddress,
+    d.full_address,
+    d.fullAddress,
+    d.display_name,
+    d.address
   );
 
-  if (formatted) {
+  if (typeof formatted === "string") {
     return cleanAddress(formatted);
   }
 
   const street = first(
-    data.street_address,
-    data.streetAddress,
-    data.street,
-    data.address_line1,
-    data.addressLine1,
-    data.address1,
-    data.line1
+    d.street_address,
+    d.streetAddress,
+    d.street,
+    d.address_line1,
+    d.addressLine1,
+    d.address1,
+    d.line1,
+    d.route,
+    d.road
   );
 
-  if (street) {
-    return unique([
-      cleanAddress(street),
-      cleanAddress(data.address_line2),
-      txt(first(
-        data.city,
-        data.locality
-      )),
-      txt(first(
-        data.state,
-        data.region
-      )),
-      txt(first(
-        data.postal_code,
-        data.zip
-      )),
-      txt(data.country)
-    ]).join(", ");
-  }
+  const streetNumber = first(
+    d.street_number,
+    d.streetNumber,
+    d.house_number
+  );
 
-  return cleanAddress(data.address);
+  const streetLine = [
+    streetNumber,
+    street
+  ].filter(Boolean).map(text).join(" ");
+
+  return [
+    streetLine,
+    first(d.address_line2, d.line2),
+    first(d.city, d.locality, d.town),
+    first(d.state, d.region),
+    first(d.postal_code, d.postcode, d.zip),
+    d.country
+  ].map(text).filter(Boolean).join(", ");
 }
 
 function looksLikeStreet(value) {
-  const address = cleanAddress(value);
+  const s = cleanAddress(value);
 
-  if (!address) return false;
+  if (!s) return false;
 
-  const streetPattern =
-    /\b(street|st\.?|road|rd\.?|avenue|ave\.?|drive|dr\.?|boulevard|blvd\.?|lane|ln\.?|way|court|ct\.?|place|pl\.?|highway|hwy\.?|terrace|parkway|pkwy\.?|square|plaza|calle|rue|paseo)\b/i;
+  if (/^(property address unavailable|undefined|null)$/i.test(s)) {
+    return false;
+  }
 
-  return (
-    streetPattern.test(address) &&
-    /\b\d{1,6}[a-z]?\b/i.test(address)
-  );
+  const roadPattern =
+    /\b(street|st\.?|road|rd\.?|avenue|ave\.?|drive|dr\.?|boulevard|blvd\.?|lane|ln\.?|way|court|ct\.?|place|pl\.?|highway|hwy\.?|terrace|parkway|pkwy\.?|square|plaza|calle|rue|paseo|route|quay|promenade|strasse|straße|via|viale|corso|chemin)\b/i;
+
+  const numbered =
+    /(?:^|,)\s*\d{1,6}[a-z]?(?:[\s,-]|$)/i;
+
+  return roadPattern.test(s) || numbered.test(s);
 }
 
 function extractLocation(raw) {
-  const data = obj(raw);
+  const data = object(raw);
 
   const sources = [
     data,
-    obj(data.location),
-    obj(data.property),
-    obj(data.hotel),
-    obj(data.details)
+    object(data.location),
+    object(data.property),
+    object(data.hotel),
+    object(data.details),
+    object(data.hotel_details),
+    object(data.property_details),
+    object(data.address_components),
+    object(data.contact),
+    object(data.contact_info)
   ];
 
-  const addresses = [];
+  const fields = [
+    "address",
+    "formatted_address",
+    "formattedAddress",
+    "full_address",
+    "fullAddress",
+    "street_address",
+    "streetAddress",
+    "hotel_address",
+    "property_address",
+    "address_line1",
+    "address1",
+    "vicinity",
+    "display_address",
+    "postal_address"
+  ];
+
+  const candidates = [];
 
   for (const source of sources) {
-    for (const key of [
-      "address",
-      "formatted_address",
-      "full_address",
-      "street_address",
-      "hotel_address",
-      "property_address"
-    ]) {
-      const address =
-        cleanAddress(source[key]);
+    for (const field of fields) {
+      const address = cleanAddress(source[field]);
 
       if (address) {
-        addresses.push({
+        candidates.push({
           address,
-          source: key
+          source: field
         });
       }
     }
+
+    const structured = cleanAddress({
+      street_number: first(
+        source.street_number,
+        source.house_number
+      ),
+      street: first(
+        source.street,
+        source.road,
+        source.route
+      ),
+      city: source.city,
+      state: source.state,
+      country: source.country,
+      postal_code: source.postal_code
+    });
+
+    if (structured) {
+      candidates.push({
+        address: structured,
+        source: "structured"
+      });
+    }
   }
 
-  const streetMatch = addresses.find(
+  const streetMatch = candidates.find(
     item => looksLikeStreet(item.address)
   );
 
-  const street =
-    streetMatch?.address || "";
+  const street = streetMatch?.address || "";
 
-  const neighborhood = txt(first(
+  const neighborhood = text(first(
     data.neighborhood,
     data.district,
     data.location?.neighborhood
   ));
 
-  const city = txt(first(
+  const city = text(first(
     data.city,
     data.locality,
     data.location?.city
   ));
 
-  const region = txt(first(
+  const region = text(first(
     data.state,
     data.region,
     data.location?.region
   ));
 
-  const country = txt(first(
+  const country = text(first(
     data.country,
     data.location?.country
   ));
@@ -445,30 +407,23 @@ function extractLocation(raw) {
     country
   ]).join(", ");
 
-  const locationLabel =
+  const label =
     street ||
-    addresses[0]?.address ||
+    candidates[0]?.address ||
     area ||
     "";
 
   return {
     address: street,
-
     formatted_address: street,
-
     address_available: Boolean(street),
-
-    address_source:
-      streetMatch?.source || "",
-
-    location_label: locationLabel,
-
+    address_source: streetMatch?.source || "",
+    location_label: label,
     location_type: street
       ? "street"
-      : locationLabel
+      : label
         ? "area"
         : "unavailable",
-
     neighborhood,
     city,
     region,
@@ -476,58 +431,54 @@ function extractLocation(raw) {
   };
 }
 
-
-/* =====================================================
-   HOTEL PHOTOS
-===================================================== */
+/* =========================
+   HOTEL IMAGES
+========================= */
 
 function extractPhotos(raw) {
-  const hotel = obj(raw);
+  const h = object(raw);
 
   const sources = [
-    hotel.thumbnail,
-    hotel.image,
-    hotel.image_url,
-    hotel.main_image,
-    hotel.photo,
-
-    ...arr(hotel.images),
-    ...arr(hotel.photos),
-    ...arr(hotel.hotel_images),
-    ...arr(hotel.hotel_photos)
+    h.thumbnail,
+    h.image,
+    h.image_url,
+    h.main_image,
+    h.photo,
+    ...array(h.images),
+    ...array(h.photos),
+    ...array(h.hotel_images),
+    ...array(h.hotel_photos)
   ];
 
   return unique(
     sources.map(item => {
-      const value =
-        typeof item === "string"
-          ? item
-          : first(
-              item?.original_image,
-              item?.image,
-              item?.url,
-              item?.thumbnail,
-              item?.src,
-              item?.large
-            );
+      const value = typeof item === "string"
+        ? item
+        : first(
+            item?.original_image,
+            item?.image,
+            item?.url,
+            item?.thumbnail,
+            item?.src,
+            item?.large
+          );
 
       return validURL(value);
     })
   );
 }
 
-
-/* =====================================================
+/* =========================
    HOTEL AMENITIES
-===================================================== */
+========================= */
 
 function extractAmenities(raw) {
-  const hotel = obj(raw);
+  const h = object(raw);
 
   const source = first(
-    hotel.amenities,
-    hotel.hotel_amenities,
-    hotel.facilities,
+    h.amenities,
+    h.hotel_amenities,
+    h.facilities,
     []
   );
 
@@ -535,13 +486,13 @@ function extractAmenities(raw) {
     ? source
     : typeof source === "string"
       ? source.split(",")
-      : Object.values(obj(source)).flat();
+      : Object.values(object(source)).flat();
 
   return unique(
     values.map(item =>
       typeof item === "string"
-        ? txt(item)
-        : txt(first(
+        ? text(item)
+        : text(first(
             item?.name,
             item?.title,
             item?.label
@@ -550,116 +501,105 @@ function extractAmenities(raw) {
   );
 }
 
-
-/* =====================================================
-   NORMALIZE HOTEL
-===================================================== */
+/* =========================
+   HOTEL NORMALIZATION
+========================= */
 
 function normalizeHotel(raw, index, q) {
-  const hotel = obj(raw);
+  const h = object(raw);
 
-  const name = txt(first(
-    hotel.name,
-    hotel.hotel_name,
-    hotel.property_name,
-    hotel.title
+  const name = text(first(
+    h.name,
+    h.hotel_name,
+    h.property_name,
+    h.title
   ));
 
   if (!name) return null;
 
-  const location =
-    extractLocation(hotel);
+  const location = extractLocation(h);
+  const images = extractPhotos(h);
+  const amenities = extractAmenities(h);
 
-  const images =
-    extractPhotos(hotel);
-
-  const amenities =
-    extractAmenities(hotel);
-
-  const gps = obj(first(
-    hotel.gps_coordinates,
-    hotel.coordinates
+  const gps = object(first(
+    h.gps_coordinates,
+    h.coordinates
   ));
 
-  const latitude = num(first(
+  const latitude = number(first(
     gps.latitude,
     gps.lat,
-    hotel.latitude,
-    hotel.lat
+    h.latitude,
+    h.lat
   ));
 
-  const longitude = num(first(
+  const longitude = number(first(
     gps.longitude,
     gps.lng,
     gps.long,
-    hotel.longitude,
-    hotel.long
+    h.longitude,
+    h.long
   ));
 
-  const propertyToken = txt(first(
-    hotel.property_token,
-    hotel.propertyToken
+  const propertyToken = text(first(
+    h.property_token,
+    h.propertyToken
   ));
 
-  const nightlyPrice = num(first(
-    hotel.rate_per_night?.extracted_lowest,
-    hotel.rate_per_night?.extracted_price,
-    hotel.extracted_price,
-    hotel.price_per_night,
-    hotel.price
+  const nightlyPrice = number(first(
+    h.rate_per_night?.extracted_lowest,
+    h.rate_per_night?.extracted_price,
+    h.extracted_price,
+    h.price_per_night,
+    h.price
   ));
 
-  const totalPrice = num(first(
-    hotel.total_rate?.extracted_lowest,
-    hotel.total_rate?.extracted_price,
-    hotel.total_price
+  const totalPrice = number(first(
+    h.total_rate?.extracted_lowest,
+    h.total_rate?.extracted_price,
+    h.total_price
   ));
 
-  const stars = num(first(
-    hotel.extracted_hotel_class,
-    hotel.hotel_class,
-    hotel.stars
+  const stars = number(first(
+    h.extracted_hotel_class,
+    h.hotel_class,
+    h.stars
   ));
 
-  const rating = num(first(
-    hotel.overall_rating,
-    hotel.rating,
-    hotel.guest_rating
+  const rating = number(first(
+    h.overall_rating,
+    h.rating,
+    h.guest_rating
   ));
 
-  const reviews = num(first(
-    hotel.reviews,
-    hotel.review_count,
-    hotel.total_reviews
+  const reviews = number(first(
+    h.reviews,
+    h.review_count,
+    h.total_reviews
   ));
 
   return {
-    id: txt(first(
+    id: text(first(
       propertyToken,
-      hotel.hotel_id,
-      hotel.place_id,
-      hotel.id,
+      h.hotel_id,
+      h.place_id,
+      h.id,
       `${name}|${index}`
     )),
 
     index,
     name,
 
-    type:
-      txt(hotel.type) || "hotel",
+    type: text(h.type) || "hotel",
 
-    description: txt(first(
-      hotel.description,
-      hotel.hotel_description
+    description: text(first(
+      h.description,
+      h.hotel_description
     )),
 
     property_token: propertyToken,
-
-    hotel_id:
-      txt(hotel.hotel_id),
-
-    place_id:
-      txt(hotel.place_id),
+    hotel_id: text(h.hotel_id),
+    place_id: text(h.place_id),
 
     ...location,
 
@@ -670,113 +610,87 @@ function normalizeHotel(raw, index, q) {
     reviews,
     review_count: reviews,
 
-    rating_description: txt(first(
-      hotel.rating_description,
-      hotel.rating_text
+    rating_description: text(first(
+      h.rating_description,
+      h.rating_text
     )),
 
     price: nightlyPrice,
-
     extracted_price: nightlyPrice,
-
     price_per_night: nightlyPrice,
-
     total_price: totalPrice,
 
     currency: q.currency,
 
     images,
     photos: images,
-
     image: images[0] || "",
-
     thumbnail: images[0] || "",
-
     image_count: images.length,
 
     amenities,
 
-    free_cancellation:
-      bool(hotel.free_cancellation),
+    free_cancellation: boolean(
+      h.free_cancellation
+    ),
 
-    free_breakfast:
-      bool(hotel.free_breakfast),
+    free_breakfast: boolean(
+      h.free_breakfast
+    ),
 
     latitude,
     longitude,
-
     lat: latitude,
     long: longitude,
 
-    deal: hotel.deal || "",
+    deal: h.deal || "",
+    deal_description: text(
+      h.deal_description
+    ),
 
-    deal_description:
-      txt(hotel.deal_description),
+    sponsored: boolean(h.sponsored),
+    eco_certified: boolean(h.eco_certified),
 
-    sponsored:
-      bool(hotel.sponsored),
-
-    eco_certified:
-      bool(hotel.eco_certified),
-
-    serpapi_property_details_link:
-      txt(hotel.serpapi_property_details_link),
+    serpapi_property_details_link: text(
+      h.serpapi_property_details_link
+    ),
 
     details_requested: false,
-
     details_loaded: false,
-
     details_error: ""
   };
 }
 
-
-/* =====================================================
+/* =========================
    SERPAPI REQUEST
-===================================================== */
+========================= */
 
 async function serpapiRequest(params) {
   const url = new URL(SERPAPI_URL);
 
-  for (
-    const [key, value]
-    of Object.entries(params)
-  ) {
+  for (const [key, value] of Object.entries(params)) {
     if (
       value !== undefined &&
       value !== null &&
       value !== ""
     ) {
-      url.searchParams.set(
-        key,
-        String(value)
-      );
+      url.searchParams.set(key, String(value));
     }
   }
 
-  const response = await fetch(
-    url.toString(),
-    {
-      method: "GET",
-
-      headers: {
-        Accept: "application/json"
-      },
-
-      signal: AbortSignal.timeout(
-        SEARCH_TIMEOUT
-      )
-    }
-  );
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json"
+    },
+    signal: AbortSignal.timeout(TIMEOUT)
+  });
 
   const data = await response.json();
 
-  if (
-    !response.ok ||
-    data.error
-  ) {
+  if (!response.ok || data.error) {
     throw new Error(
-      txt(data.error) ||
+      text(data.error) ||
       `SerpApi HTTP ${response.status}`
     );
   }
@@ -784,87 +698,65 @@ async function serpapiRequest(params) {
   return data;
 }
 
-
-/* =====================================================
+/* =========================
    GOOGLE HOTELS SEARCH
-
-   IMPORTANT:
-   EXACTLY ONE SERPAPI REQUEST PER CALL.
-===================================================== */
+========================= */
 
 async function searchHotels(q, apiKey) {
   const params = {
     engine: "google_hotels",
-
     api_key: apiKey,
 
     q: q.destination,
 
-    check_in_date:
-      q.check_in_date,
-
-    check_out_date:
-      q.check_out_date,
+    check_in_date: q.check_in_date,
+    check_out_date: q.check_out_date,
 
     adults: q.adults,
-
     children: q.children,
 
     currency: q.currency,
-
     hl: "en",
-
     gl: "us"
   };
 
   if (q.page_token) {
-    params.next_page_token =
-      q.page_token;
+    params.next_page_token = q.page_token;
   }
 
   return serpapiRequest(params);
 }
 
-
-/* =====================================================
+/* =========================
    EXTRACT PROPERTIES
-===================================================== */
+========================= */
 
 function extractProperties(data) {
-  const candidates = [
+  return [
     data?.properties,
     data?.hotels,
     data?.results,
     data?.data?.properties
-  ];
-
-  return candidates.find(
-    Array.isArray
-  ) || [];
+  ].find(Array.isArray) || [];
 }
 
-
-/* =====================================================
-   EXTRACT NEXT PAGE TOKEN
-===================================================== */
+/* =========================
+   PAGINATION
+========================= */
 
 function getNextPageToken(data) {
-  return txt(first(
+  return text(first(
     data?.serpapi_pagination?.next_page_token,
     data?.pagination?.next_page_token,
     data?.next_page_token
   ));
 }
 
+/* =========================
+   DEDUPLICATION
+========================= */
 
-/* =====================================================
-   REMOVE DUPLICATES WITHIN BATCH
-===================================================== */
-
-function deduplicateHotels(
-  rawProperties,
-  q
-) {
+function deduplicateHotels(rawProperties, q) {
   const hotels = [];
   const seen = new Set();
 
@@ -901,83 +793,58 @@ function deduplicateHotels(
   return hotels;
 }
 
-
-/* =====================================================
-   HOTEL SORTING
-===================================================== */
+/* =========================
+   SORTING
+========================= */
 
 function sortHotels(hotels, sort) {
   const list = [...hotels];
 
-  function compare(
-    a,
-    b,
-    field,
-    descending
-  ) {
+  function compare(a, b, field, descending) {
     const x = a[field];
     const y = b[field];
 
-    if (
-      x == null &&
-      y == null
-    ) {
-      return 0;
-    }
-
+    if (x == null && y == null) return 0;
     if (x == null) return 1;
     if (y == null) return -1;
 
-    return descending
-      ? y - x
-      : x - y;
+    return descending ? y - x : x - y;
   }
 
   switch (sort) {
     case "price-low":
       list.sort(
-        (a, b) =>
-          compare(a, b, "price", false)
+        (a, b) => compare(a, b, "price", false)
       );
       break;
 
     case "price-high":
       list.sort(
-        (a, b) =>
-          compare(a, b, "price", true)
+        (a, b) => compare(a, b, "price", true)
       );
       break;
 
     case "rating":
       list.sort(
-        (a, b) =>
-          compare(a, b, "rating", true)
+        (a, b) => compare(a, b, "rating", true)
       );
       break;
 
     case "stars":
       list.sort(
-        (a, b) =>
-          compare(a, b, "stars", true)
+        (a, b) => compare(a, b, "stars", true)
       );
-      break;
-
-    default:
       break;
   }
 
   return list;
 }
 
-
-/* =====================================================
+/* =========================
    MAIN VERCEL HANDLER
-===================================================== */
+========================= */
 
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   res.setHeader(
     "Access-Control-Allow-Origin",
     "*"
@@ -998,9 +865,7 @@ export default async function handler(
     "no-store"
   );
 
-  if (
-    req.method === "OPTIONS"
-  ) {
+  if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
 
@@ -1022,8 +887,7 @@ export default async function handler(
   if (!apiKey) {
     return res.status(500).json({
       success: false,
-      error:
-        "SERPAPI_API_KEY is missing."
+      error: "SERPAPI_API_KEY is missing."
     });
   }
 
@@ -1031,9 +895,7 @@ export default async function handler(
 
   try {
     q = parseSearch(req);
-
     validateSearch(q);
-
   } catch (error) {
     return res.status(400).json({
       success: false,
@@ -1042,164 +904,89 @@ export default async function handler(
   }
 
   try {
-    /*
-    ========================================
-    STEP 1:
-    REQUEST ONE GOOGLE HOTELS PAGE
-    ========================================
-    */
+    // Exactly one provider search request.
 
-    const searchData =
-      await searchHotels(
-        q,
-        apiKey
-      );
+    const searchData = await searchHotels(
+      q,
+      apiKey
+    );
 
-    /*
-    ========================================
-    STEP 2:
-    EXTRACT HOTEL RESULTS
-    ========================================
-    */
+    const rawProperties = extractProperties(
+      searchData
+    );
 
-    const rawProperties =
-      extractProperties(searchData);
+    const hotels = deduplicateHotels(
+      rawProperties,
+      q
+    );
 
-    /*
-    ========================================
-    STEP 3:
-    NORMALIZE AND DEDUPLICATE
-    ========================================
-    */
+    const selectedHotels = sortHotels(
+      hotels,
+      q.sort
+    ).slice(0, q.limit);
 
-    const hotels =
-      deduplicateHotels(
-        rawProperties,
-        q
-      );
-
-    /*
-    ========================================
-    STEP 4:
-    RETURN UP TO 20 PROPERTIES
-    ========================================
-    */
-
-    const selectedHotels =
-      sortHotels(
-        hotels,
-        q.sort
-      ).slice(
-        0,
-        q.limit
-      );
-
-    /*
-    ========================================
-    STEP 5:
-    READ PAGINATION TOKEN
-    ========================================
-    */
-
-    const nextPageToken =
-      getNextPageToken(searchData);
+    const nextPageToken = getNextPageToken(
+      searchData
+    );
 
     const hasMore =
       Boolean(nextPageToken) &&
       nextPageToken !== q.page_token;
 
-    /*
-    ========================================
-    STEP 6:
-    ADDRESS STATISTICS
-    ========================================
-    */
+    const streetCount = selectedHotels.filter(
+      h => h.address_available
+    ).length;
 
-    const streetCount =
-      selectedHotels.filter(
-        hotel =>
-          hotel.address_available
-      ).length;
+    const areaCount = selectedHotels.filter(
+      h =>
+        !h.address_available &&
+        h.location_type === "area"
+    ).length;
 
-    const areaCount =
-      selectedHotels.filter(
-        hotel =>
-          !hotel.address_available &&
-          hotel.location_type === "area"
-      ).length;
-
-    const missingCount =
-      selectedHotels.filter(
-        hotel =>
-          hotel.location_type ===
-          "unavailable"
-      ).length;
-
-    /*
-    ========================================
-    STEP 7:
-    RETURN RESPONSE TO SHOPIFY
-    ========================================
-    */
+    const missingCount = selectedHotels.filter(
+      h => h.location_type === "unavailable"
+    ).length;
 
     return res.status(200).json({
       success: true,
 
       hotels: selectedHotels,
-
       properties: selectedHotels,
-
       results: selectedHotels,
 
       search: q,
 
       pagination: {
         has_more: hasMore,
-
         next_page_token: hasMore
           ? nextPageToken
           : null,
-
         page_size: PAGE_SIZE,
-
-        returned:
-          selectedHotels.length
+        returned: selectedHotels.length
       },
 
       meta: {
-        requested_limit:
-          q.limit,
+        requested_limit: q.limit,
+        raw_properties: rawProperties.length,
+        unique_properties: hotels.length,
+        returned_properties: selectedHotels.length,
 
-        raw_properties:
-          rawProperties.length,
+        street_addresses: streetCount,
+        area_locations: areaCount,
+        unavailable_locations: missingCount,
 
-        unique_properties:
-          hotels.length,
-
-        returned_properties:
-          selectedHotels.length,
-
-        street_addresses:
-          streetCount,
-
-        area_locations:
-          areaCount,
-
-        unavailable_locations:
-          missingCount,
+        address_fields_present:
+          selectedHotels.filter(
+            h => h.address || h.location_label
+          ).length,
 
         details_attempted: 0,
-
         details_succeeded: 0,
-
         details_failed: 0,
 
         serpapi_request_count: 1,
-
         shopify_request_count: 1,
-
-        frontend_batch_size:
-          PAGE_SIZE
+        frontend_batch_size: PAGE_SIZE
       }
     });
 
@@ -1211,7 +998,6 @@ export default async function handler(
 
     return res.status(502).json({
       success: false,
-
       error:
         error.message ||
         "Hotel search failed."
